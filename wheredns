@@ -1,0 +1,178 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+usage() {
+  cat <<EOF
+Usage: $(basename "$0") <domain|ip> [options]
+
+Options:
+  -ip           Treat input as an IP and perform reverse lookup (PTR)
+  -email        Show only email-related records (MX, SPF, DMARC)
+  -h, --help    Show this help
+
+Default (no options): show A, AAAA, MX, SPF, DMARC, NS, CNAME, SOA, TXT
+EOF
+}
+
+if [ $# -lt 1 ]; then
+  usage
+  exit 1
+fi
+
+INPUT="$1"
+shift || true
+
+email_only=false
+reverse_only=false
+
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    -ip|--ip)
+      reverse_only=true
+      shift
+      ;;
+    -email|--email)
+      email_only=true
+      shift
+      ;;
+    -h|--help)
+      usage
+      exit 0
+      ;;
+    *)
+      echo "Unknown option: $1"
+      usage
+      exit 1
+      ;;
+  esac
+done
+
+print_section() {
+  echo
+  echo "==== $1 ===="
+}
+
+# --- Email-related helpers ---
+
+is_ip() {
+  if [[ "$1" =~ ^([0-9]{1,3}\.){3}[0-9]{1,3}$ ]]; then
+    return 0
+  fi
+  if [[ "$1" =~ ^[0-9A-Fa-f:]+$ ]] && [[ "$1" == *:* ]]; then
+    return 0
+  fi
+  return 1
+}
+
+if is_ip "$INPUT"; then
+  reverse_only=true
+fi
+
+if $reverse_only; then
+  print_section "PTR"
+  ptr=$(dig +short -x "$INPUT" || true)
+  [[ -n "$ptr" ]] && printf '%s\n' "$ptr" || echo "No PTR records found."
+  exit 0
+fi
+
+DOMAIN="$INPUT"
+
+get_spf() {
+  dig +short TXT "$DOMAIN" | tr -d '"' | grep -i 'v=spf1' || true
+}
+
+get_dmarc() {
+  local host="_dmarc.$DOMAIN"
+  dig +short TXT "$host" | tr -d '"' | grep -i 'v=DMARC1' || true
+}
+
+get_mx() {
+  dig +short MX "$DOMAIN" || true
+}
+
+# --- Generic DNS helpers ---
+
+get_a() {
+  dig +short A "$DOMAIN" || true
+}
+
+get_aaaa() {
+  dig +short AAAA "$DOMAIN" || true
+}
+
+get_ns() {
+  dig +short NS "$DOMAIN" || true
+}
+
+get_cname() {
+  dig +short CNAME "$DOMAIN" || true
+}
+
+get_soa() {
+  dig +short SOA "$DOMAIN" || true
+}
+
+get_txt() {
+  dig +short TXT "$DOMAIN" || true
+}
+
+echo "Domain: $DOMAIN"
+
+if $email_only; then
+  # EMAIL-ONLY MODE
+  print_section "MX"
+  mx=$(get_mx)
+  [[ -n "$mx" ]] && printf '%s\n' "$mx" || echo "No MX records found."
+
+  print_section "SPF"
+  spf=$(get_spf)
+  [[ -n "$spf" ]] && printf '%s\n' "$spf" || echo "No SPF record found."
+
+  print_section "DMARC"
+  dmarc_host="_dmarc.$DOMAIN"
+  dmarc=$(get_dmarc)
+  echo "Host: $dmarc_host"
+  [[ -n "$dmarc" ]] && printf '%s\n' "$dmarc" || echo "No DMARC record found."
+
+  exit 0
+fi
+
+# DEFAULT: RETURN "ALL" USEFUL RECORDS
+
+print_section "A"
+a_recs=$(get_a)
+[[ -n "$a_recs" ]] && printf '%s\n' "$a_recs" || echo "No A records found."
+
+print_section "AAAA"
+aaaa_recs=$(get_aaaa)
+[[ -n "$aaaa_recs" ]] && printf '%s\n' "$aaaa_recs" || echo "No AAAA records found."
+
+print_section "MX"
+mx=$(get_mx)
+[[ -n "$mx" ]] && printf '%s\n' "$mx" || echo "No MX records found."
+
+print_section "SPF"
+spf=$(get_spf)
+[[ -n "$spf" ]] && printf '%s\n' "$spf" || echo "No SPF record found."
+
+print_section "DMARC"
+dmarc_host="_dmarc.$DOMAIN"
+dmarc=$(get_dmarc)
+echo "Host: $dmarc_host"
+[[ -n "$dmarc" ]] && printf '%s\n' "$dmarc" || echo "No DMARC record found."
+
+print_section "NS"
+ns=$(get_ns)
+[[ -n "$ns" ]] && printf '%s\n' "$ns" || echo "No NS records found."
+
+print_section "CNAME"
+cname=$(get_cname)
+[[ -n "$cname" ]] && printf '%s\n' "$cname" || echo "No CNAME records found."
+
+print_section "SOA"
+soa=$(get_soa)
+[[ -n "$soa" ]] && printf '%s\n' "$soa" || echo "No SOA record found."
+
+print_section "TXT"
+txt=$(get_txt)
+[[ -n "$txt" ]] && printf '%s\n' "$txt" || echo "No TXT records found."
